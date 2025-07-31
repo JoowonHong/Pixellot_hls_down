@@ -9,6 +9,7 @@ import ffmpeg
 import subprocess
 import threading
 import re
+import unicodedata
 
 import os
 import sys
@@ -22,10 +23,11 @@ class Function:
 
     # 생성자
 
-    def __init__(self,listfile=None,txt_dest_path=None,cmb_club=None,cmb_system=None,cmb_line=None):
+    def __init__(self,listfile=None,txt_dest_path=None,cmb_club=None,cmb_system=None,cmb_line=None, batch_entry=None, treeview=None):
          # 현재 스크립트 파일의 디렉토리를 얻기
         self.current_directory = os.path.dirname(os.path.realpath(__file__))
-        self.list_file = listfile
+        self.list_file = listfile  # 기존 Listbox (호환성)
+        self.treeview = treeview  # Treeview (이벤트 목록용)
         self.txt_dest_path = txt_dest_path
         self.cmb_club = cmb_club
         self.cmb_system = cmb_system
@@ -40,6 +42,7 @@ class Function:
         
         self.reserve_api_url = None
         self.system_id = None
+        self.batch_entry = batch_entry  # Entry 위젯 참조
   # --------------------GUI part--------------------------------------------------
 
     def utc_to_seoul_time(self, utc_time_str):
@@ -87,36 +90,41 @@ class Function:
             self.list_file.delete(index)
 
     def toggle_select_all(self):
-        """전체 선택/해제 기능"""
-        if not self.list_file:
-            return
-            
-        if self.select_all_var.get():
-            # 전체 선택
-            self.list_file.selection_set(0, END)
-            print("전체 선택됨")
-        else:
-            # 전체 해제
-            self.list_file.selection_clear(0, END)
-            print("전체 선택 해제됨")
+        """전체 선택/해제 기능 (Treeview 기반)"""
+        if hasattr(self, 'treeview') and self.treeview is not None:
+            all_items = self.treeview.get_children()
+            if self.select_all_var.get():
+                # 전체 선택
+                self.treeview.selection_set(all_items)
+                print("전체 선택됨 (Treeview)")
+            else:
+                # 전체 해제
+                self.treeview.selection_remove(all_items)
+                print("전체 선택 해제됨 (Treeview)")
 
     def get_selected_items(self):
-        """선택된 항목들의 텍스트를 반환"""
-        selected_indices = self.list_file.curselection()
-        selected_items = []
-        for index in selected_indices:
-            selected_items.append(self.list_file.get(index))
-        return selected_items
+        """선택된 항목들의 값을 반환 (Treeview 기반)"""
+        if hasattr(self, 'treeview') and self.treeview is not None:
+            selected_items = []
+            for item_id in self.treeview.selection():
+                values = self.treeview.item(item_id, 'values')
+                selected_items.append(values)
+            return selected_items
+        return []
 
     def get_selected_count(self):
-        """선택된 항목의 개수를 반환"""
-        return len(self.list_file.curselection())
+        """선택된 항목의 개수를 반환 (Treeview 기반)"""
+        if hasattr(self, 'treeview') and self.treeview is not None:
+            return len(self.treeview.selection())
+        return 0
 
     def extract_event_id_from_text(self, item_text):
-        """이벤트 텍스트에서 이벤트 ID를 추출"""
+        """이벤트 텍스트(문자열) 또는 tuple에서 이벤트 ID를 추출"""
         try:
-            # 형식: (이벤트명) 날짜시간 - 이벤트ID
-            # 마지막 - 다음의 부분이 이벤트 ID
+            if isinstance(item_text, tuple):
+                # Treeview 선택: (이벤트명, 홈팀, 어웨이팀, 날짜, 이벤트ID)
+                return item_text[-1]
+            # 기존 Listbox 문자열 처리
             parts = item_text.split(' - ')
             if len(parts) >= 2:
                 event_id = parts[-1].strip()
@@ -269,27 +277,33 @@ class Function:
         df = pd.DataFrame()
         self.api_test = PixellotAPI(self.isReal)
 
+        # Entry 위젯에서 batch_count 값 읽기
+        batch_count = 1
+        if self.batch_entry is not None:
+            try:
+                val = int(self.batch_entry.get())
+                if val > 0 and val <= 100:
+                    batch_count = val
+            except Exception:
+                pass
 
-        for i in range(0,1000,100):
+        for i in range(0, batch_count * 100, 100):
             num1 = 100
             num2 = i
 
             ENDPOINT_EVENTS = f"events?limit={num1}&skip={num2}"
-            TEAMS_DATA = self.api_test.get_api_data( ENDPOINT_EVENTS)
+            TEAMS_DATA = self.api_test.get_api_data(ENDPOINT_EVENTS)
 
             if TEAMS_DATA:
                 print("받아온 데이터:", TEAMS_DATA)
                 df = pd.concat([df, pd.DataFrame(TEAMS_DATA)], ignore_index=True)
-
-                # print("변환된 데이터 프레임: ",df)   
-                # df.to_csv('teams.csv', index=False, encoding='utf-8-sig')
             else:
-                break  # 데이터가 없으면 반복 종료
                 print("데이터를 가져오지 못했습니다.")
-       
-            # 리스트박스에 팀 리스트 추가
+                break  # 데이터가 없으면 반복 종료
+
+        # 리스트박스에 팀 리스트 추가
         self.list_file.delete(0, END)  # 기존 리스트 초기화
-    
+
         if not df.empty:
             for _, team in df.iterrows():
                 team_name = team.get('name', 'Unknown')
@@ -299,47 +313,45 @@ class Function:
             self.list_file.insert(END, "팀 데이터가 없습니다.")
 
     def load_events(self):
-        """선택된 클럽의 이벤트를 불러와서 리스트박스에 표시"""
+        """선택된 클럽의 이벤트를 불러와서 리스트박스에 표시 (batch_entry 값 사용)"""
         if not self.api_test:
             msgbox.showwarning("경고", "먼저 클럽을 불러와 주세요.")
             return
-            
         selected_club = self.cmb_club.get()
         if not selected_club:
             msgbox.showwarning("경고", "먼저 클럽을 선택해 주세요.")
             return
-            
         # 클럽 ID 추출
         if "(" in selected_club and ")" in selected_club:
             club_id = selected_club.split("(")[-1].replace(")", "")
         else:
             msgbox.showerror("오류", "클럽 ID를 추출할 수 없습니다.")
             return
-            
         try:
-            # 클럽의 이벤트 리스트를 100개씩 나누어서 1000개까지 가져오기
+            # batch_entry에서 batch_count 읽기
+            batch_count = 1
+            if hasattr(self, 'batch_entry') and self.batch_entry is not None:
+                try:
+                    val = int(self.batch_entry.get())
+                    if val > 0 and val <= 100:
+                        batch_count = val
+                except Exception:
+                    pass
             events_data = []
-            
-            for i in range(0, 1000, 100):
+            for i in range(0, batch_count * 100, 100):
                 limit = 100
                 skip = i
-                
-                # 클럽별 이벤트 엔드포인트에 limit과 skip 파라미터 추가
                 endpoint = f"clubs/{club_id}/events?limit={limit}&skip={skip}"
                 batch_data = self.api_test.get_api_data(endpoint)
-                
                 if batch_data:
                     print(f"받아온 이벤트 데이터 (skip={skip}, limit={limit}): {len(batch_data)}개")
-                    events_data.extend(batch_data)  # 리스트에 추가
+                    events_data.extend(batch_data)
                 else:
                     print(f"더 이상 가져올 이벤트가 없습니다. (총 {len(events_data)}개 수집)")
-                    break  # 데이터가 없으면 반복 종료
-            
+                    break
             if not events_data:
                 msgbox.showinfo("정보", "이벤트 데이터가 없습니다.")
                 return
-                
-            # 디버깅: 첫 번째 이벤트 데이터 구조 확인
             if events_data and len(events_data) > 0:
                 print("=" * 50)
                 print("첫 번째 이벤트 전체 데이터:")
@@ -348,18 +360,17 @@ class Function:
                 print("이벤트에 있는 모든 키들:")
                 print(list(events_data[0].keys()) if events_data[0] else "No keys")
                 print("=" * 50)
-                
-            # 리스트박스에 이벤트 추가
-            self.list_file.delete(0, END)  # 기존 리스트 초기화
-            
+            # Treeview 사용: 기존 row 삭제
+            if self.treeview is not None:
+                for row in self.treeview.get_children():
+                    self.treeview.delete(row)
+            else:
+                self.list_file.delete(0, END)
             for i, event in enumerate(events_data):
                 print(f"\n--- 이벤트 {i+1} 분석 ---")
                 print(f"전체 이벤트 데이터: {event}")
-                
-                # 다양한 가능한 이름 필드들을 시도
                 possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
                 event_name = 'Unknown Event'
-                
                 for field in possible_name_fields:
                     if field in event and event[field]:
                         event_name = event[field]
@@ -367,41 +378,39 @@ class Function:
                         break
                 else:
                     print(f"이름 필드를 찾지 못함. 시도한 필드들: {possible_name_fields}")
-                    
                 event_id = event.get('_id', 'N/A')
                 start_date = event.get('startDateTime', event.get('start$date', ''))
-                
-                # UTC 시간을 서울 시간으로 변환하여 표시
+                # 홈팀/어웨이팀 추출
+                home_team = ''
+                away_team = ''
+                if 'scoreboardData' in event:
+                    home_team = event['scoreboardData'].get('homeTeam', '')
+                    away_team = event['scoreboardData'].get('awayTeam', '')
+                if not home_team:
+                    home_team = event.get('homeTeam', '')
+                if not away_team:
+                    away_team = event.get('awayTeam', '')
                 formatted_datetime = ''
                 if start_date:
                     formatted_datetime = self.utc_to_seoul_time(start_date)
-                
-                print(f"최종 - Event name: '{event_name}', Event ID: '{event_id}', Seoul Time: '{formatted_datetime}'")
-                
-                # 서울 시간이 있으면 포함해서 표시
-                if formatted_datetime:
-                    display_text = f"({event_name}) {formatted_datetime} - {event_id}"
+                print(f"최종 - Event name: '{event_name}', Home: '{home_team}', Away: '{away_team}', Event ID: '{event_id}', Seoul Time: '{formatted_datetime}'")
+                # Treeview에 삽입
+                if self.treeview is not None:
+                    self.treeview.insert('', 'end', values=(event_name, home_team, away_team, formatted_datetime, event_id))
                 else:
-                    display_text = f"({event_name}) - {event_id}"
-                    
-                self.list_file.insert(END, display_text)
-                
+                    # 리스트 표시: (이벤트명) [homeTeam vs awayTeam] 날짜시간 - 이벤트ID
+                    team_str = f" [{home_team} vs {away_team}]" if home_team or away_team else ''
+                    if formatted_datetime:
+                        display_text = f"({event_name}){team_str} {formatted_datetime} - {event_id}"
+                    else:
+                        display_text = f"({event_name}){team_str} - {event_id}"
+                    self.list_file.insert(END, display_text)
             msgbox.showinfo("성공", f"{len(events_data)}개의 이벤트를 불러왔습니다.")
-            
         except Exception as e:
             msgbox.showerror("오류", f"이벤트를 불러오는 중 오류가 발생했습니다: {str(e)}")
             print(f"Error loading events: {e}")
 
 
-        
-    
-        # 리스트박스에도 클럽 리스트 추가
-        # self.list_file.delete(0, END)  # 기존 리스트 초기화
-        # for club_option in club_options:
-        #  self.list_file.insert(END, club_option)
-        # selected = self.cmb_club.get()  # 선택된 문자열 예: "클럽A (123456)"   
-
-    
 
     def start(self):
         print("선택된 venue id:", self.system_id)
@@ -483,8 +492,12 @@ class Function:
             
         print("HLS URL 다운로드 시작...")
         
-        # 다운로드 폴더 생성
-        download_folder = os.path.join(self.current_directory, "downloads")
+        # 다운로드 폴더 생성 (실행파일 위치 기준)
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = self.current_directory
+        download_folder = os.path.join(base_dir, "downloads")
         if not os.path.exists(download_folder):
             os.makedirs(download_folder)
             print(f"다운로드 폴더 생성: {download_folder}")
@@ -643,8 +656,13 @@ class Function:
         log_text = scrolledtext.ScrolledText(log_frame, height=12, width=70, font=("Consolas", 8))
         log_text.pack(fill=BOTH, expand=True)
         
-        # 취소 버튼
-        cancel_button = Button(progress_window, text="취소", command=lambda: self.cancel_download())
+        # 취소/닫기 버튼
+        def on_cancel_or_close():
+            self.cancel_download()
+            if progress_window.winfo_exists():
+                progress_window.destroy()
+
+        cancel_button = Button(progress_window, text="취소", command=on_cancel_or_close)
         cancel_button.pack(pady=10)
         
         self.download_cancelled = False
@@ -811,19 +829,24 @@ class Function:
                 # 프로세스 완료 대기
                 if not self.download_cancelled:
                     self.download_process.wait()
-                    
                     if self.download_process.returncode == 0:
                         progress_label.config(text="✅ 다운로드 완료!")
                         progress_bar['value'] = 100
                         stats_label.config(text="완료!")
                         update_log("✅ 다운로드 성공!")
                         cancel_button.config(text="닫기")
+                        cancel_button.config(command=lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
                     else:
-                        raise Exception(f"ffmpeg 프로세스가 오류 코드 {self.download_process.returncode}로 종료되었습니다.")
+                        progress_label.config(text="❌ 다운로드 실패!")
+                        stats_label.config(text="실패!")
+                        update_log(f"❌ 다운로드 실패! (오류 코드: {self.download_process.returncode})")
+                        cancel_button.config(text="닫기")
+                        cancel_button.config(command=lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
                 else:
                     update_log("❌ 사용자에 의해 취소됨")
                     progress_label.config(text="취소됨")
                     cancel_button.config(text="닫기")
+                    cancel_button.config(command=lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
                     
             except ffmpeg.Error as ffmpeg_err:
                 error_msg = f"ffmpeg-python 라이브러리 오류: {ffmpeg_err.stderr.decode('utf-8', errors='replace') if ffmpeg_err.stderr else str(ffmpeg_err)}"
@@ -834,11 +857,12 @@ class Function:
             update_log(f"❌ 오류: {str(e)}")
             progress_label.config(text="오류 발생!")
             cancel_button.config(text="닫기")
+            cancel_button.config(command=lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
             raise e
         finally:
             # 3초 후 자동으로 창 닫기 (수동으로 닫지 않은 경우)
             if not self.download_cancelled and self.download_process and self.download_process.returncode == 0:
-                progress_window.after(5000, lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
+                progress_window.after(1500, lambda: progress_window.destroy() if progress_window.winfo_exists() else None)
 
     def cancel_download(self):
         """다운로드 취소"""
@@ -848,6 +872,153 @@ class Function:
                 self.download_process.terminate()
             except:
                 pass
+
+    def create_studio_urls(self):
+        """선택된 이벤트들의 스튜디오 URL이 포함된 Excel 파일 생성"""
+        # 선택된 이벤트들 확인
+        selected_items = self.get_selected_items()
+        selected_count = self.get_selected_count()
+        
+        print(f"선택된 이벤트 수: {selected_count}")
+        
+        if selected_count == 0:
+            msgbox.showwarning("경고", "선택된 이벤트가 없습니다.")
+            return
+        
+        if not self.api_test:
+            msgbox.showwarning("경고", "먼저 클럽을 불러와 주세요.")
+            return
+        
+        try:
+            studio_data = []
+            
+            print("선택된 이벤트들의 스튜디오 URL 생성 중...")
+            
+            for i, item_text in enumerate(selected_items):
+                try:
+                    # 이벤트 ID 추출
+                    event_id = self.extract_event_id_from_text(item_text)
+                    if not event_id:
+                        print(f"이벤트 ID를 추출할 수 없습니다: {item_text}")
+                        continue
+                    print(f"처리 중: {i+1}/{selected_count} - 이벤트 ID: {event_id}")
+                    # 이벤트 상세 정보 가져오기
+                    event_detail = self.api_test.get_api_data(f"events/{event_id}")
+                    if not event_detail:
+                        print(f"이벤트 {event_id}의 상세 정보를 가져올 수 없습니다.")
+                        continue
+                    # 이벤트 이름 추출
+                    possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
+                    event_name = 'Unknown Event'
+                    for field in possible_name_fields:
+                        if field in event_detail and event_detail[field]:
+                            event_name = event_detail[field]
+                            break
+                    else:
+                        # API에서 이름을 찾지 못한 경우, 선택된 텍스트에서 추출 시도
+                        try:
+                            if '(' in item_text and ')' in item_text:
+                                start_idx = item_text.find('(') + 1
+                                end_idx = item_text.find(')')
+                                extracted_name = item_text[start_idx:end_idx].strip()
+                                if extracted_name:
+                                    event_name = extracted_name
+                        except:
+                            pass
+                    # 홈팀/어웨이팀 추출
+                    home_team = ''
+                    away_team = ''
+                    # Pixellot API의 이벤트 상세에서 scoreboardData/homeTeam, awayTeam 또는 team1Name/team2Name 등 다양한 필드 시도
+                    if 'scoreboardData' in event_detail:
+                        home_team = event_detail['scoreboardData'].get('homeTeam', '')
+                        away_team = event_detail['scoreboardData'].get('awayTeam', '')
+                    if not home_team:
+                        home_team = event_detail.get('homeTeam', '')
+                    if not away_team:
+                        away_team = event_detail.get('awayTeam', '')
+                    # 시작일, 종료일 추출 (UTC -> 서울시간)
+                    start_date_utc = event_detail.get('startDateTime', event_detail.get('start$date', ''))
+                    end_date_utc = event_detail.get('endDateTime', event_detail.get('end$date', ''))
+                    # 서울시간으로 변환
+                    start_date_seoul = self.utc_to_seoul_time(start_date_utc) if start_date_utc else ''
+                    end_date_seoul = self.utc_to_seoul_time(end_date_utc) if end_date_utc else ''
+                    # 스튜디오 URL 생성
+                    studio_url = f"https://corehub.aisportstv.com/Studio/StudioMgmt?eventid={event_id}"
+                    # 데이터 추가 (컬럼 순서: 이벤트명, 홈팀, 어웨이팀, 이벤트ID ...)
+                    studio_data.append({
+                        '이벤트명': event_name,
+                        '홈팀': home_team,
+                        '어웨이팀': away_team,
+                        '이벤트ID': event_id,
+                        '시작일시(서울)': start_date_seoul,
+                        '종료일시(서울)': end_date_seoul,
+                        '스튜디오URL': studio_url
+                    })
+                    print(f"✓ 처리 완료: {event_name}")
+                except Exception as e:
+                    print(f"이벤트 처리 중 오류: {item_text} - {str(e)}")
+                    continue
+            
+            if not studio_data:
+                msgbox.showerror("오류", "처리할 수 있는 이벤트가 없습니다.")
+                return
+            
+            # DataFrame 생성
+            df = pd.DataFrame(studio_data)
+            
+            # 파일 저장 위치 선택 (CSV)
+            current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"studio_urls_{current_time}.csv"
+            if getattr(sys, 'frozen', False):
+                exe_dir = os.path.dirname(sys.executable)
+            else:
+                exe_dir = self.current_directory
+            file_path = filedialog.asksaveasfilename(
+                title="CSV 파일 저장",
+                defaultextension=".csv",
+                initialfile=default_filename,
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialdir=exe_dir
+            )
+            if not file_path:
+                print("파일 저장이 취소되었습니다.")
+                return
+            try:
+                df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                print(f"✅ CSV 파일 저장 완료: {file_path}")
+                result_msg = f"스튜디오 URL CSV 파일이 생성되었습니다!\n\n"
+                result_msg += f"• 처리된 이벤트: {len(studio_data)}개\n"
+                result_msg += f"• 저장 위치: {file_path}\n\n"
+                result_msg += "파일을 열어서 확인하시겠습니까?"
+                open_file = msgbox.askyesno("완료", result_msg)
+                if open_file:
+                    try:
+                        os.startfile(file_path)
+                    except Exception as open_err:
+                        print(f"파일 열기 오류: {open_err}")
+                        msgbox.showinfo("알림", f"파일이 저장되었습니다: {file_path}")
+            except Exception as save_err:
+                error_msg = f"CSV 파일 저장 중 오류가 발생했습니다: {str(save_err)}"
+                print(error_msg)
+                msgbox.showerror("저장 오류", error_msg)
+                return
+            
+            # 콘솔에 결과 출력
+            print("\n=== 스튜디오 URL 생성 결과 ===")
+            for i, data in enumerate(studio_data, 1):
+                print(f"{i}. {data['이벤트명']}")
+                print(f"   시작: {data['시작일시(서울)']}")
+                print(f"   종료: {data['종료일시(서울)']}")
+                print(f"   스튜디오 URL: {data['스튜디오URL']}")
+                print()
+            
+            return df
+            
+        except Exception as e:
+            error_msg = f"스튜디오 URL 생성 중 오류가 발생했습니다: {str(e)}"
+            print(error_msg)
+            msgbox.showerror("오류", error_msg)
+            return None
 
     def yesno(text):
         response = msgbox.askyesno("Make AR Video",text)
