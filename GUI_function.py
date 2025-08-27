@@ -20,6 +20,28 @@ from Pixellot_api import PixellotAPI
 #기능 함수 구현
 
 class Function:
+    def create_event_url(self, event=None):
+        """선택된 venue의 URL을 txt_dest_path에 표시"""
+        self.txt_dest_path.delete(0, END)
+        self.txt_dest_path.insert(0, self.reserve_api_url)
+        print("촬영예약 URL:", self.reserve_api_url)
+        selected = self.cmb_system.get()  # 선택된 venue
+        # venue id만 추출
+        if "(" in selected and ")" in selected:
+            self.system_id = selected.split("(")[-1].replace(")", "")
+        else:
+            self.system_id = ""
+        print("선택된 venue id:", self.system_id)
+    def update_isReal(self, event=None):
+        """운영 서버 사용 여부 토글"""
+        self.isReal = not self.isReal
+        print(f"isReal: {self.isReal}")
+    def import_club_list(self):
+        """클럽 리스트를 Pixellot API에서 불러와 콤보박스에 세팅"""
+        self.api_test = PixellotAPI(self.isReal)
+        self.club_data = self.api_test.get_api_data("clubs")
+        club_options = [f"{club.get('name', '')} ({club.get('_id', '')})" for club in self.club_data]
+        self.cmb_club['values'] = club_options
 
     # 생성자
 
@@ -108,7 +130,8 @@ class Function:
             selected_items = []
             for item_id in self.treeview.selection():
                 values = self.treeview.item(item_id, 'values')
-                selected_items.append(values)
+                # 항상 tuple로 반환
+                selected_items.append(tuple(values))
             return selected_items
         return []
 
@@ -122,13 +145,18 @@ class Function:
         """이벤트 텍스트(문자열) 또는 tuple에서 이벤트 ID를 추출"""
         try:
             if isinstance(item_text, tuple):
-                # Treeview 선택: (이벤트명, 홈팀, 어웨이팀, 날짜, 이벤트ID)
-                return item_text[-1]
+                # Treeview 선택: (이벤트명, 홈팀, 어웨이팀, 날짜, 종료일시, 이벤트ID, HLS URL, venue_id, venue_name)
+                # 이벤트ID는 6번째(인덱스 5)
+                return item_text[5]
             # 기존 Listbox 문자열 처리
             parts = item_text.split(' - ')
             if len(parts) >= 2:
                 event_id = parts[-1].strip()
-                return event_id
+                # 이벤트ID가 24자리 hex 등 실제 고유ID일 때만 반환
+                import re
+                if re.match(r'^[a-fA-F0-9]{24}$', event_id):
+                    return event_id
+                return None
             return None
         except Exception as e:
             print(f"이벤트 ID 추출 오류: {e}")
@@ -136,112 +164,39 @@ class Function:
 
     def get_event_hls_urls(self, selected_items):
         """선택된 이벤트들의 HLS URL 목록을 반환"""
-        if not self.api_test:
-            print("API 객체가 없습니다.")
-            return []
-            
         hls_urls = []
-        
-        for item_text in selected_items:
-            event_id = self.extract_event_id_from_text(item_text)
-            if not event_id:
-                print(f"이벤트 ID를 추출할 수 없습니다: {item_text}")
+        columns = []
+        # Try to get columns from treeview if available
+        if hasattr(self, 'treeview') and self.treeview is not None and hasattr(self.treeview, 'columns'):
+            columns = self.treeview["columns"]
+        for item in selected_items:
+            if not isinstance(item, tuple):
                 continue
-                
-            try:
-                # 이벤트 상세 정보 가져오기
-                event_detail = self.api_test.get_api_data(f"events/{event_id}")
-                
-                if event_detail:
-                    # URLs에서 hd 정보 추출
-                    urls = event_detail.get('urls', {})
-                    hd_url = urls.get('hd', '')
-                    
-                    # 이벤트 이름 추출 (다양한 필드 시도)
-                    possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
-                    event_name = 'Unknown Event'
-                    
-                    for field in possible_name_fields:
-                        if field in event_detail and event_detail[field]:
-                            event_name = event_detail[field]
-                            print(f"이벤트 이름을 '{field}' 필드에서 찾음: '{event_name}'")
-                            break
-                    else:
-                        print(f"이벤트 {event_id}: 이름 필드를 찾지 못함. 시도한 필드들: {possible_name_fields}")
-                        print(f"사용 가능한 필드들: {list(event_detail.keys())}")
-                        
-                        # API에서 이름을 찾지 못한 경우, 선택된 텍스트에서 추출 시도
-                        try:
-                            # 형식: (이벤트명) 날짜시간 - 이벤트ID
-                            if '(' in item_text and ')' in item_text:
-                                start_idx = item_text.find('(') + 1
-                                end_idx = item_text.find(')')
-                                extracted_name = item_text[start_idx:end_idx].strip()
-                                if extracted_name:
-                                    event_name = extracted_name
-                                    print(f"선택된 텍스트에서 이벤트 이름 추출: '{event_name}'")
-                        except Exception as extract_err:
-                            print(f"텍스트에서 이벤트 이름 추출 실패: {extract_err}")
-                    
-                    event_info = {
-                        'event_id': event_id,
-                        'event_name': event_name,
-                        'hd_url': hd_url,
-                        'display_text': item_text
-                    }
-                    
-                    hls_urls.append(event_info)
-                    print(f"이벤트 {event_id} HLS URL: {hd_url}")
-                else:
-                    print(f"이벤트 {event_id}의 상세 정보를 가져올 수 없습니다.")
-                    
-            except Exception as e:
-                print(f"이벤트 {event_id} 처리 중 오류: {e}")
+            print("아이템:", item)
+            print("아이템형식:", type(item))
+            event_name = item[0] if len(item) > 0 else ''
+            home_team = item[1] if len(item) > 1 else ''
+            away_team = item[2] if len(item) > 2 else ''
+            start_date = item[3] if len(item) > 3 else ''
+            end_date = item[4] if len(item) > 4 else ''
+            event_id = item[5] if len(item) > 5 else ''
+            hd_url = item[6] if len(item) > 6 else ''
+            venue_id = item[7] if len(item) > 7 else ''
+            venue_name = item[8] if len(item) > 8 else ''
+            # hd_url이 없으면 건너뜀 (이벤트ID는 있는데 HLS URL이 없는 경우)
+            if event_id and not hd_url:
                 continue
-        
+            event_info = {
+                'event_id': event_id,
+                'event_name': event_name,
+                'hd_url': hd_url,
+                'venue_id': venue_id,
+                'venue_name': venue_name,
+                'display_text': item
+            }
+            hls_urls.append(event_info)
+            print(f"이벤트 {event_id} HLS URL: {hd_url}, Venue ID: {venue_id}, Venue Name: {venue_name}")
         return hls_urls
-
-    def update_isReal(self,event =None):#미완성
-        if self.isReal:
-            self.isReal = False
-        else:
-            self.isReal = True
-        print(self.isReal)
-        pass
-
-    #저장 경로 (폴더 선택)
-    def create_event_url(self,event =None):
-       
-        self.txt_dest_path.delete(0,END)
-        self.txt_dest_path.insert(0,self.reserve_api_url)
-        print("촬영예약 URL:", self.reserve_api_url)
-        selected = self.cmb_system.get()  # 선택된 문자열 예: "클럽A (123456)"
-        # id만 추출
-        if "(" in selected and ")" in selected:
-            self.system_id = selected.split("(")[-1].replace(")", "")
-        else:
-            self.system_id = ""
-        print("선택된 venue id:", self.system_id)
-
-    def import_club_list(self):
-        self.api_test = PixellotAPI(self.isReal)
-        self.club_data = self.api_test.get_api_data("clubs")
-        club_options = [f"{club.get('name', '')} ({club.get('_id', '')})" for club in self.club_data]
-        
-        # 콤보박스에 옵션 세팅
-        self.cmb_club['values'] = club_options  
-        
-    
-        # 리스트박스에도 클럽 리스트 추가
-        # self.list_file.delete(0, END)  # 기존 리스트 초기화
-        # for club_option in club_options:
-        #  self.list_file.insert(END, club_option)
-        # selected = self.cmb_club.get()  # 선택된 문자열 예: "클럽A (123456)"
-    
-    def import_club_list_table(self,event=NONE):
-
-        self.api_test = PixellotAPI(self.isReal)
-        self.club_data = self.api_test.get_api_data("clubs")
         club_options = [f"({club.get('name', '')}) {club.get('_id', '')}" for club in self.club_data]
     
         # 리스트박스에도 클럽 리스트 추가
@@ -312,7 +267,7 @@ class Function:
         else:
             self.list_file.insert(END, "팀 데이터가 없습니다.")
 
-    def load_events(self):
+    def load_club_events(self):
         """선택된 클럽의 이벤트를 불러와서 리스트박스에 표시 (batch_entry 값 사용)"""
         if not self.api_test:
             msgbox.showwarning("경고", "먼저 클럽을 불러와 주세요.")
@@ -354,33 +309,52 @@ class Function:
                 return
             if events_data and len(events_data) > 0:
                 print("=" * 50)
-                print("첫 번째 이벤트 전체 데이터:")
-                print(events_data[0])
-                print("=" * 50)
-                print("이벤트에 있는 모든 키들:")
-                print(list(events_data[0].keys()) if events_data[0] else "No keys")
-                print("=" * 50)
+                # print("첫 번째 이벤트 전체 데이터:")
+                # print(events_data[0])
+                # print("=" * 50)
+                # print("이벤트에 있는 모든 키들:")
+                # print(list(events_data[0].keys()) if events_data[0] else "No keys")
+                # print("=" * 50)
             # Treeview 사용: 기존 row 삭제
             if self.treeview is not None:
                 for row in self.treeview.get_children():
                     self.treeview.delete(row)
             else:
                 self.list_file.delete(0, END)
-            for i, event in enumerate(events_data):
-                print(f"\n--- 이벤트 {i+1} 분석 ---")
-                print(f"전체 이벤트 데이터: {event}")
+            # venue_id와 venue_name 매핑 준비
+            venue_id_name_map = {}
+            # venues 정보 가져오기 (클럽 상세에서)
+            selected_club = self.cmb_club.get()
+            club_id = ''
+            if '(' in selected_club and ')' in selected_club:
+                club_id = selected_club.split('(')[-1].replace(')', '')
+            if club_id:
+                club_detail = self.api_test.get_api_data(f"clubs/{club_id}")
+                venues = club_detail.get('venues', []) if club_detail else []
+                for venue in venues:
+                    vid = venue.get('_id', '')
+                    vname = venue.get('name', '')
+                    if vid:
+                        venue_id_name_map[vid] = vname
+            # 이벤트ID 리스트 생성 (반복문 전에 선언)
+            event_id_list = []
+
+            overlay_url_map = {}
+            event_rows = []
+            # 1. 모든 이벤트 정보에 대해 event_rows 생성 (overlayUrl은 나중에 추가)
+            for idx, event in enumerate(events_data):
+                event_id = event.get('_id', 'N/A')
                 possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
                 event_name = 'Unknown Event'
                 for field in possible_name_fields:
                     if field in event and event[field]:
                         event_name = event[field]
-                        print(f"이벤트 이름을 '{field}' 필드에서 찾음: '{event_name}'")
+                        # print(f"이벤트 이름을 '{field}' 필드에서 찾음: '{event_name}'")
                         break
                 else:
                     print(f"이름 필드를 찾지 못함. 시도한 필드들: {possible_name_fields}")
-                event_id = event.get('_id', 'N/A')
+                event_id_list.append(event_id)
                 start_date = event.get('startDateTime', event.get('start$date', ''))
-                # 홈팀/어웨이팀 추출
                 home_team = ''
                 away_team = ''
                 if 'scoreboardData' in event:
@@ -390,27 +364,198 @@ class Function:
                     home_team = event.get('homeTeam', '')
                 if not away_team:
                     away_team = event.get('awayTeam', '')
-                formatted_datetime = ''
-                if start_date:
-                    formatted_datetime = self.utc_to_seoul_time(start_date)
-                print(f"최종 - Event name: '{event_name}', Home: '{home_team}', Away: '{away_team}', Event ID: '{event_id}', Seoul Time: '{formatted_datetime}'")
-                # Treeview에 삽입
-                if self.treeview is not None:
-                    self.treeview.insert('', 'end', values=(event_name, home_team, away_team, formatted_datetime, event_id))
-                else:
-                    # 리스트 표시: (이벤트명) [homeTeam vs awayTeam] 날짜시간 - 이벤트ID
-                    team_str = f" [{home_team} vs {away_team}]" if home_team or away_team else ''
-                    if formatted_datetime:
-                        display_text = f"({event_name}){team_str} {formatted_datetime} - {event_id}"
+                formatted_datetime = self.utc_to_seoul_time(start_date) if start_date else ''
+                hls_url = ''
+                if 'urls' in event and isinstance(event['urls'], dict):
+                    hls_url = event['urls'].get('hd', '')
+                venue_id = ''
+                venue_name = ''
+                if 'venue' in event and isinstance(event['venue'], dict):
+                    venue_id = event['venue'].get('_id', '')
+                    venue_name = venue_id_name_map.get(venue_id, '')
+                    if len(venue_name) > 12:
+                        venue_name = venue_name[12:]
+                end_date = event.get('endDateTime', event.get('end$date', ''))
+                end_datetime = self.utc_to_seoul_time(end_date) if end_date else ''
+                event_rows.append([event_name, home_team, away_team, formatted_datetime, end_datetime, event_id, hls_url, venue_id, venue_name])
+
+            # 2. 모든 이벤트ID에 대해 overlayUrl 병렬 조회하여 event_rows에 추가
+            import threading
+            def fetch_overlay(idx, event_id):
+                vas_response = self.api_test.get_api_data(f"events/{event_id}/vas")
+                overlay_url = ''
+                if vas_response and isinstance(vas_response, dict):
+                    if 'overlayProvider' in vas_response and isinstance(vas_response['overlayProvider'], dict):
+                        overlay_url = vas_response['overlayProvider'].get('overlayUrl', '')
+                        if not overlay_url:
+                            overlay_url = vas_response.get('overlayUrl', '')
                     else:
-                        display_text = f"({event_name}){team_str} - {event_id}"
+                        overlay_url = vas_response.get('overlayUrl', '')
+                event_rows[idx].append(overlay_url)
+                overlay_url_map[event_id] = overlay_url
+
+            threads = []
+            for idx, event in enumerate(events_data):
+                event_id = event.get('_id', 'N/A')
+                t = threading.Thread(target=fetch_overlay, args=(idx, event_id))
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
+
+            # overlayUrl 정보 가져오기 (진행상황 출력)
+            # print(f"overlayUrl 조회 시작: 총 {len(event_id_list)}개 이벤트")
+            # for idx, event_id in enumerate(event_id_list, 1):
+            #     print(f"[{idx}/{len(event_id_list)}] events/{event_id}/vas 조회 완료.")
+            # print("=== 모든 이벤트 overlayUrl 결과 ===")
+            # for event_id, overlay_url in overlay_url_map.items():
+            #     print(f"{event_id}: {overlay_url}")
+            # print("overlayUrl 조회 및 출력 완료!")
+            # Treeview에 데이터 삽입 (overlayUrl 추가)
+            if self.treeview is not None:
+                for row in event_rows:
+                    self.treeview.insert('', 'end', values=row)
+            else:
+                for row in event_rows:
+                    team_str = f" [{row[1]} vs {row[2]}]" if row[1] or row[2] else ''
+                    formatted_datetime = row[3]
+                    overlay_url = row[-1]
+                    event_id = row[5]
+                    if formatted_datetime:
+                        display_text = f"({row[0]}){team_str} {formatted_datetime} - {event_id} - {overlay_url}"
+                    else:
+                        display_text = f"({row[0]}){team_str} - {event_id} - {overlay_url}"
                     self.list_file.insert(END, display_text)
+                # 이벤트ID 리스트 출력 (마지막에 한번만)
+                # print(f"불러온 이벤트ID 리스트: {event_id_list}")
             msgbox.showinfo("성공", f"{len(events_data)}개의 이벤트를 불러왔습니다.")
         except Exception as e:
             msgbox.showerror("오류", f"이벤트를 불러오는 중 오류가 발생했습니다: {str(e)}")
             print(f"Error loading events: {e}")
 
 
+
+    def load_all_events(self):
+        """전체 이벤트를 불러와서 Treeview에 표시 (batch_entry 값 사용)"""
+       # self.api_test가 None이면 초기화
+        if self.api_test is None:
+            self.api_test = PixellotAPI(self.isReal)
+        batch_count = 1
+        if hasattr(self, 'batch_entry') and self.batch_entry is not None:
+            try:
+                val = int(self.batch_entry.get())
+                if val > 0 and val <= 100:
+                    batch_count = val
+            except Exception:
+                pass
+        events_data = []
+        for i in range(0, batch_count * 100, 100):
+            limit = 100
+            skip = i
+            endpoint = f"events?limit={limit}&skip={skip}"
+            batch_data = self.api_test.get_api_data(endpoint)
+            if batch_data:
+                print(f"받아온 전체 이벤트 데이터 (skip={skip}, limit={limit}): {len(batch_data)}개")
+                events_data.extend(batch_data)
+            else:
+                print(f"더 이상 가져올 이벤트가 없습니다. (총 {len(events_data)}개 수집)")
+                break
+        if not events_data:
+            msgbox.showinfo("정보", "전체 이벤트 데이터가 없습니다.")
+            return
+        # Treeview 사용: 기존 row 삭제
+        if self.treeview is not None:
+            for row in self.treeview.get_children():
+                self.treeview.delete(row)
+        else:
+            self.list_file.delete(0, END)
+        # 이벤트ID 리스트 생성 (반복문 전에 선언)
+        event_id_list = []
+        event_rows = []
+        overlay_url_map = {}
+        import threading
+        # 1. 모든 이벤트 정보에 대해 event_rows 생성 (overlayUrl은 나중에 추가)
+        for idx, event in enumerate(events_data):
+            event_id = event.get('_id', 'N/A')
+            possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
+            event_name = 'Unknown Event'
+            for field in possible_name_fields:
+                if field in event and event[field]:
+                    event_name = event[field]
+                    break
+            event_id_list.append(event_id)
+            start_date = event.get('startDateTime', event.get('start$date', ''))
+            end_date = event.get('endDateTime', event.get('end$date', ''))
+            home_team = ''
+            away_team = ''
+            if 'scoreboardData' in event:
+                home_team = event['scoreboardData'].get('homeTeam', '')
+                away_team = event['scoreboardData'].get('awayTeam', '')
+            if not home_team:
+                home_team = event.get('homeTeam', '')
+            if not away_team:
+                away_team = event.get('awayTeam', '')
+            formatted_datetime = self.utc_to_seoul_time(start_date) if start_date else ''
+            end_datetime = self.utc_to_seoul_time(end_date) if end_date else ''
+            hls_url = ''
+            if 'urls' in event and isinstance(event['urls'], dict):
+                hls_url = event['urls'].get('hd', '')
+            venue_id = ''
+            venue_name = ''
+            if 'venue' in event and isinstance(event['venue'], dict):
+                venue_id = event['venue'].get('_id', '')
+                venue_name = event['venue'].get('name', '')
+                if len(venue_name) > 12:
+                    venue_name = venue_name[12:]
+            event_rows.append([event_name, home_team, away_team, formatted_datetime, end_datetime, event_id, hls_url, venue_id, venue_name])
+
+        # 2. 모든 이벤트ID에 대해 overlayUrl 병렬 조회하여 event_rows에 추가
+        def fetch_overlay(idx, event_id):
+            vas_response = self.api_test.get_api_data(f"events/{event_id}/vas")
+            overlay_url = ''
+            if vas_response and isinstance(vas_response, dict):
+                if 'overlayProvider' in vas_response and isinstance(vas_response['overlayProvider'], dict):
+                    overlay_url = vas_response['overlayProvider'].get('overlayUrl', '')
+                    if not overlay_url:
+                        overlay_url = vas_response.get('overlayUrl', '')
+                else:
+                    overlay_url = vas_response.get('overlayUrl', '')
+            event_rows[idx].append(overlay_url)
+
+        threads = []
+        for idx, event in enumerate(events_data):
+            event_id = event.get('_id', 'N/A')
+            t = threading.Thread(target=fetch_overlay, args=(idx, event_id))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+        # overlayUrl 정보 가져오기 (진행상황 출력)
+        # print(f"overlayUrl 조회 시작: 총 {len(event_id_list)}개 이벤트")
+        # for idx, event_id in enumerate(event_id_list, 1):
+        #     print(f"[{idx}/{len(event_id_list)}] events/{event_id}/vas 조회 완료.")
+        # print("=== 모든 이벤트 overlayUrl 결과 ===")
+        # for event_id, overlay_url in overlay_url_map.items():
+        #     print(f"{event_id}: {overlay_url}")
+        # print("overlayUrl 조회 및 출력 완료!")
+        # Treeview에 데이터 삽입 (overlayUrl 추가)
+        if self.treeview is not None:
+            for row in event_rows:
+                self.treeview.insert('', 'end', values=row)
+        else:
+            for row in event_rows:
+                team_str = f" [{row[1]} vs {row[2]}]" if row[1] or row[2] else ''
+                formatted_datetime = row[3]
+                overlay_url = row[-1]
+                event_id = row[5]
+                if formatted_datetime:
+                    display_text = f"({row[0]}){team_str} {formatted_datetime} - {event_id} - {overlay_url}"
+                else:
+                    display_text = f"({row[0]}){team_str} - {event_id} - {overlay_url}"
+                self.list_file.insert(END, display_text)
+        # 이벤트ID 리스트 출력 (마지막에 한번만)
+        # print(f"불러온 전체 이벤트ID 리스트: {event_id_list}")
+        msgbox.showinfo("성공", f"{len(events_data)}개의 전체 이벤트를 불러왔습니다.")
 
     def start(self):
         print("선택된 venue id:", self.system_id)
@@ -442,15 +587,16 @@ class Function:
             result_text = "HLS URL 목록:\n\n"
             
             for i, event_info in enumerate(hls_urls, 1):
-                event_name = event_info['event_name']
-                event_id = event_info['event_id']
-                hd_url = event_info['hd_url']
-                
+                # 컬럼명 일치에 따라 '이벤트명' 또는 'event_name' 사용
+                event_name = event_info.get('이벤트명', event_info.get('event_name', ''))
+                event_id = event_info.get('이벤트ID', event_info.get('event_id', ''))
+                hd_url = event_info.get('HLS URL', event_info.get('hd_url', ''))
+
                 print(f"{i}. 이벤트명: {event_name}")
                 print(f"   이벤트ID: {event_id}")
                 print(f"   HLS URL: {hd_url}")
                 print()
-                
+
                 result_text += f"{i}. {event_name}\n"
                 result_text += f"   ID: {event_id}\n"
                 if hd_url:
@@ -510,14 +656,22 @@ class Function:
                 hd_url = event_info.get('hd_url', '')
                 event_name = event_info.get('event_name', 'Unknown')
                 event_id = event_info.get('event_id', 'unknown_id')
-                
+
+                # HLS URL 정보가 없으면 팝업 후 건너뜀
                 if not hd_url:
+                    msgbox.showinfo("HLS URL 정보 없음", f"이벤트명: {event_name}\n이벤트ID: {event_id}\nHLS URL 정보가 없습니다.\n다운로드를 건너뜁니다.")
                     print(f"이벤트 '{event_name}'에 HLS URL이 없습니다. 건너뜁니다.")
                     continue
-                
+
+                # 라이브 스트림 안내: hlsid=HTTP_ID_ 포함시 팝업 및 건너뜀
+                if 'hlsid=HTTP_ID_' in hd_url:
+                    msgbox.showinfo("라이브 스트림 안내", f"이벤트명: {event_name}\n이 영상은 현재 라이브 중입니다.\n다운로드는 녹화 완료 후 가능합니다.")
+                    print(f"[라이브 중] {event_name} - {hd_url}")
+                    continue
+
                 # 안전한 파일명 생성 (특수문자 제거 및 한국어 처리)
                 import unicodedata
-                
+
                 # 한국어와 영문, 숫자, 기본 특수문자만 허용
                 safe_chars = []
                 for c in event_name:
@@ -527,38 +681,37 @@ class Function:
                         safe_chars.append(c)
                     else:
                         safe_chars.append('_')  # 기타 특수문자는 언더스코어로 대체
-                
+
                 safe_name = ''.join(safe_chars).strip()
-                
+
                 # 파일명이 너무 길면 자르기
                 if len(safe_name) > 100:
                     safe_name = safe_name[:100]
-                
+
                 # 빈 이름 방지
                 if not safe_name:
                     safe_name = f"event_{event_id}"
-                    
+
                 output_filename = f"{safe_name}_{event_id}.mp4"
                 output_path = os.path.join(download_folder, output_filename)
-                
+
                 print(f"\n다운로드 {i+1}/{len(hls_urls)}")
                 print(f"이벤트명: {event_name}")
                 print(f"HLS URL: {hd_url}")
                 print(f"저장 경로: {output_path}")
-                
+
                 # HLS URL 유효성 검사
                 if not hd_url.startswith(('http://', 'https://')):
                     print(f"❌ 유효하지 않은 URL: {hd_url}")
                     raise Exception(f"유효하지 않은 URL 형식: {hd_url}")
-                
+
                 # ffmpeg를 사용하여 HLS 다운로드
                 print(f"⏳ ffmpeg 다운로드 시작...")
-                
+
                 try:
                     # conda 환경의 ffmpeg 경로 사용
                     ffmpeg_path = r"C:\Users\jwhon\anaconda3\Library\bin\ffmpeg.exe"
-                    
-                    
+
                     # 가장 리눅스 일반적인 경로
                     # ffmpeg_path = "/usr/bin/ffmpeg"
 
@@ -566,19 +719,19 @@ class Function:
                     # GPU 가속 옵션 (기본값: False, CPU 복사 모드)
                     use_gpu = False  # True로 변경하면 GPU 가속 사용
                     self.download_with_progress(ffmpeg_path, hd_url, output_path, event_name, use_gpu)
-                    
+
                     # 파일이 실제로 생성되었는지 확인
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                         print(f"✓ 다운로드 완료: {output_filename}")
                         print(f"✓ 파일 크기: {os.path.getsize(output_path)} bytes")
                     else:
                         raise Exception("파일이 생성되지 않았거나 크기가 0입니다.")
-                        
+
                 except Exception as ffmpeg_err:
                     error_details = str(ffmpeg_err)
                     print(f"❌ ffmpeg 오류: {error_details}")
                     raise Exception(f"ffmpeg 다운로드 실패: {error_details}")
-                
+
                 print(f"✓ 다운로드 완료: {output_filename}")
                 download_results.append({
                     'event_name': event_name,
@@ -586,7 +739,7 @@ class Function:
                     'output_path': output_path,
                     'status': 'success'
                 })
-                
+
             except ffmpeg.Error as e:
                 error_msg = f"ffmpeg 오류 - 이벤트 '{event_name}': {e.stderr.decode() if e.stderr else str(e)}"
                 print(f"✗ {error_msg}")
@@ -596,7 +749,7 @@ class Function:
                     'status': 'failed',
                     'error': error_msg
                 })
-                
+
             except Exception as e:
                 error_msg = f"다운로드 오류 - 이벤트 '{event_name}': {str(e)}"
                 print(f"✗ {error_msg}")
@@ -891,60 +1044,75 @@ class Function:
         
         try:
             studio_data = []
-            
             print("선택된 이벤트들의 스튜디오 URL 생성 중...")
-            
+            # venue_id와 venue_name 매핑 준비
+            venue_id_name_map = {}
+            selected_club = self.cmb_club.get()
+            club_id = ''
+            if '(' in selected_club and ')' in selected_club:
+                club_id = selected_club.split('(')[-1].replace(')', '')
+            if club_id:
+                club_detail = self.api_test.get_api_data(f"clubs/{club_id}")
+                venues = club_detail.get('venues', []) if club_detail else []
+                for venue in venues:
+                    vid = venue.get('_id', '')
+                    vname = venue.get('name', '')
+                    if vid:
+                        venue_id_name_map[vid] = vname
+
+            # overlayUrl 병렬 조회를 위한 준비
+            overlay_url_map = {}
+            def fetch_overlay(event_id):
+                vas_response = self.api_test.get_api_data(f"events/{event_id}/vas")
+                overlay_url = ''
+                if vas_response and isinstance(vas_response, dict):
+                    if 'overlayProvider' in vas_response and isinstance(vas_response['overlayProvider'], dict):
+                        overlay_url = vas_response['overlayProvider'].get('overlayUrl', '')
+                        if not overlay_url:
+                            overlay_url = vas_response.get('overlayUrl', '')
+                    else:
+                        overlay_url = vas_response.get('overlayUrl', '')
+                overlay_url_map[event_id] = overlay_url
+
+            # 이벤트ID 추출 및 overlayUrl 병렬 조회
+            event_id_list = []
+            threads = []
             for i, item_text in enumerate(selected_items):
+                event_id = self.extract_event_id_from_text(item_text)
+                if event_id:
+                    event_id_list.append(event_id)
+                    t = threading.Thread(target=fetch_overlay, args=(event_id,))
+                    threads.append(t)
+                    t.start()
+            for t in threads:
+                t.join()
+
+            # 이벤트 상세 정보 및 studio_data 생성 (selected_items에서 직접 추출)
+            for i, item in enumerate(selected_items):
                 try:
-                    # 이벤트 ID 추출
-                    event_id = self.extract_event_id_from_text(item_text)
+                    # dict 기반 접근
+                    if isinstance(item, dict):
+                        event_id = item.get('이벤트ID', '')
+                        event_name = item.get('이벤트명', '')
+                        home_team = item.get('홈팀', '')
+                        away_team = item.get('어웨이팀', '')
+                        start_date_seoul = item.get('시작일시', '')
+                        end_date_seoul = item.get('종료일시', '')
+                        venue_name = item.get('venue_name', '')
+                    else:
+                        event_id = self.extract_event_id_from_text(item)
+                        event_name = item[0] if len(item) > 0 else ''
+                        home_team = item[1] if len(item) > 1 else ''
+                        away_team = item[2] if len(item) > 2 else ''
+                        start_date_seoul = item[3] if len(item) > 3 else ''
+                        end_date_seoul = item[4] if len(item) > 4 else ''
+                        venue_name = item[8] if len(item) > 8 else ''
                     if not event_id:
-                        print(f"이벤트 ID를 추출할 수 없습니다: {item_text}")
+                        print(f"이벤트 ID를 추출할 수 없습니다: {item}")
                         continue
                     print(f"처리 중: {i+1}/{selected_count} - 이벤트 ID: {event_id}")
-                    # 이벤트 상세 정보 가져오기
-                    event_detail = self.api_test.get_api_data(f"events/{event_id}")
-                    if not event_detail:
-                        print(f"이벤트 {event_id}의 상세 정보를 가져올 수 없습니다.")
-                        continue
-                    # 이벤트 이름 추출
-                    possible_name_fields = ['name', 'eventName', 'title', 'displayName', 'gameName', 'description']
-                    event_name = 'Unknown Event'
-                    for field in possible_name_fields:
-                        if field in event_detail and event_detail[field]:
-                            event_name = event_detail[field]
-                            break
-                    else:
-                        # API에서 이름을 찾지 못한 경우, 선택된 텍스트에서 추출 시도
-                        try:
-                            if '(' in item_text and ')' in item_text:
-                                start_idx = item_text.find('(') + 1
-                                end_idx = item_text.find(')')
-                                extracted_name = item_text[start_idx:end_idx].strip()
-                                if extracted_name:
-                                    event_name = extracted_name
-                        except:
-                            pass
-                    # 홈팀/어웨이팀 추출
-                    home_team = ''
-                    away_team = ''
-                    # Pixellot API의 이벤트 상세에서 scoreboardData/homeTeam, awayTeam 또는 team1Name/team2Name 등 다양한 필드 시도
-                    if 'scoreboardData' in event_detail:
-                        home_team = event_detail['scoreboardData'].get('homeTeam', '')
-                        away_team = event_detail['scoreboardData'].get('awayTeam', '')
-                    if not home_team:
-                        home_team = event_detail.get('homeTeam', '')
-                    if not away_team:
-                        away_team = event_detail.get('awayTeam', '')
-                    # 시작일, 종료일 추출 (UTC -> 서울시간)
-                    start_date_utc = event_detail.get('startDateTime', event_detail.get('start$date', ''))
-                    end_date_utc = event_detail.get('endDateTime', event_detail.get('end$date', ''))
-                    # 서울시간으로 변환
-                    start_date_seoul = self.utc_to_seoul_time(start_date_utc) if start_date_utc else ''
-                    end_date_seoul = self.utc_to_seoul_time(end_date_utc) if end_date_utc else ''
-                    # 스튜디오 URL 생성
                     studio_url = f"https://corehub.aisportstv.com/Studio/StudioMgmt?eventid={event_id}"
-                    # 데이터 추가 (컬럼 순서: 이벤트명, 홈팀, 어웨이팀, 이벤트ID ...)
+                    overlay_url = overlay_url_map.get(event_id, '')
                     studio_data.append({
                         '이벤트명': event_name,
                         '홈팀': home_team,
@@ -952,19 +1120,22 @@ class Function:
                         '이벤트ID': event_id,
                         '시작일시(서울)': start_date_seoul,
                         '종료일시(서울)': end_date_seoul,
-                        '스튜디오URL': studio_url
+                        '장비명': venue_name,
+                        '스튜디오URL': studio_url,
+                        'overlayUrl': overlay_url
                     })
                     print(f"✓ 처리 완료: {event_name}")
                 except Exception as e:
-                    print(f"이벤트 처리 중 오류: {item_text} - {str(e)}")
+                    print(f"이벤트 처리 중 오류: {item} - {str(e)}")
                     continue
             
             if not studio_data:
                 msgbox.showerror("오류", "처리할 수 있는 이벤트가 없습니다.")
                 return
             
-            # DataFrame 생성
+            # DataFrame 생성 및 '장비명' 기준 정렬
             df = pd.DataFrame(studio_data)
+            df = df.sort_values(by='장비명', na_position='last').reset_index(drop=True)
             
             # 파일 저장 위치 선택 (CSV)
             current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1010,6 +1181,7 @@ class Function:
                 print(f"   시작: {data['시작일시(서울)']}")
                 print(f"   종료: {data['종료일시(서울)']}")
                 print(f"   스튜디오 URL: {data['스튜디오URL']}")
+                print(f"   overlayUrl: {data['overlayUrl']}")
                 print()
             
             return df

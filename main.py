@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # Function 객체 미리 생성 (treeview는 아래에서 할당)
     gui = Function()
 
-    gui.cmb_club = ttk.Combobox(row1, state="readonly", values=[], width=60)
+    gui.cmb_club = ttk.Combobox(row1, state="readonly", values=[], width=100)
     gui.cmb_club.pack(side="left", padx=1, pady=1)
 
     btn1 = Button(row1, text="Pixellot 클럽 조회", width=15, command=gui.import_club_list)
@@ -48,12 +48,16 @@ if __name__ == "__main__":
     row2.pack(fill="x")
     lbl2 = Label(row2, text="Pixellot 시스템 리스트", width=18)
     lbl2.pack(side="left")
-    gui.cmb_system = ttk.Combobox(row2, state="readonly", values=[], width=60)
+    gui.cmb_system = ttk.Combobox(row2, state="readonly", values=[], width=100)
     gui.cmb_system.pack(side="left", padx=1, pady=1)
     gui.cmb_system.bind("<<ComboboxSelected>>", gui.create_event_url)
 
-    btn_load_events = Button(row2, text="Pixellot 이벤트 조회", width=15, command=gui.load_events)
+    btn_load_events = Button(row2, text="클럽 이벤트 조회", width=15, command=gui.load_club_events)
     btn_load_events.pack(side="left", padx=5, pady=5)
+
+    # 전체 이벤트 조회 버튼 추가
+    btn_load_all_events = Button(row2, text="전체 이벤트 조회", width=15, command=gui.load_all_events)
+    btn_load_all_events.pack(side="left", padx=5, pady=5)
 
     # 배치 수 입력
     batch_label = Label(row2, text="조회할 이벤트 수(x100)", width=18)
@@ -65,7 +69,7 @@ if __name__ == "__main__":
 
     # 리스트 프레임 (Treeview)
     list_frame = LabelFrame(root, text="Event List")
-    list_frame.pack(fill="x", padx=5, pady=5, ipady=5)
+    list_frame.pack(fill="both", padx=5, pady=5, ipady=5, expand=True)
 
     # 전체 선택/해제 체크박스 프레임
     checkbox_frame = Frame(list_frame)
@@ -75,14 +79,17 @@ if __name__ == "__main__":
     chk_select_all.pack(side="left")
 
     list_container = Frame(list_frame)
-    list_container.pack(fill="both", padx=5, pady=5)
+    list_container.pack(fill="both", padx=5, pady=5, expand=True)
 
-    columns = ("이벤트명", "홈팀", "어웨이팀", "날짜", "이벤트ID")
-    treeview = ttk.Treeview(list_container, columns=columns, show="headings", height=15)
-    for col, width in zip(columns, [30, 15, 15, 20, 30]):
+
+    # HLS URL + venue_id + 시작/종료시간 + overlayUrl 컬럼 추가
+    columns = ("이벤트명", "홈팀", "어웨이팀", "시작시간", "종료시간", "이벤트ID", "HLS URL", "장비ID", "장비명", "overlayUrl")
+    treeview = ttk.Treeview(list_container, columns=columns, show="headings", height=30)
+    for col, width in zip(columns, [30, 10, 10, 18, 18, 20, 40, 20, 20, 40]):
         treeview.heading(col, text=col)
         treeview.column(col, width=width*8, anchor="center")
     treeview.pack(side="left", fill="both", expand=True)
+
 
     scrollbar = Scrollbar(list_container, orient="vertical", command=treeview.yview)
     scrollbar.pack(side="right", fill='y')
