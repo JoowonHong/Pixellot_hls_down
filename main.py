@@ -51,7 +51,17 @@ if __name__ == "__main__":
     gui.cmb_system = ttk.Combobox(row2, state="readonly", values=[], width=100)
     gui.cmb_system.pack(side="left", padx=1, pady=1)
     gui.cmb_system.bind("<<ComboboxSelected>>", gui.create_event_url)
+    
+    # 출력 경로를 Pixellot 시스템 리스트 아래에 배치
+    row3 = Frame(path_frame)
+    row3.pack(fill="x")
+    lbl_dest = Label(row3, text="촬영 예약 URL(구현 X)", width=18)
+    lbl_dest.pack(side="left")
+    gui.txt_dest_path = Entry(row3, width=80)
+    gui.txt_dest_path.pack(side="left", padx=2, pady=2)
 
+
+    #클럽 이벤트 조회 버튼 추가
     btn_load_events = Button(row2, text="클럽 이벤트 조회", width=15, command=gui.load_club_events)
     btn_load_events.pack(side="left", padx=5, pady=5)
 
